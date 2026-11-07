@@ -62,6 +62,10 @@ from puerto_rico.env import PuertoRicoEnv
 from training.wrapper import CleanRLAECWrapper
 from agents.ppo_agent import PpoNetwork as PPOAgent
 from training.random_bot import RandomBot
+# [Moka] 상대 섞기에 필요한 것들
+from agents.registry import make_agent
+from puerto_rico.forward_model import ForwardModel
+from puerto_rico.observation import flatten_observation
 from puerto_rico.constants import Role
 
 ACT_DIM = 200
@@ -84,6 +88,34 @@ def make_env(obs_mode: str = 'full', egocentric: bool = True,
     return CleanRLAECWrapper(env, obs_mode=obs_mode, egocentric=egocentric)
 
 
+# [Moka] 상대 섞기 ─────────────────────────────────────────────────────────────
+# 'self'는 학습 중인 신경망 자신, 나머지는 make_agent()로 만드는 고정된 상대.
+# 'orig'는 조교 체크포인트를 쓰는 원본 PPO (학습하지 않음).
+OPPONENT_SPECS = {
+    "orig":          "PPO",
+    "tradebuilding": "TradeBuilding",
+    "actionvalue":   "ActionValue",
+    "factory":       "Factory",
+    "shippingrush":  "ShippingRush",
+    "random":        "Random",
+    "searchlite":    "SearchLite",
+}
+
+
+def parse_opponents(text):
+    """'self:0.4,orig:0.1,...' -> (이름 목록, 확률 목록)"""
+    names, weights = [], []
+    for part in text.split(","):
+        name, w = part.split(":")
+        name = name.strip().lower()
+        if name != "self" and name not in OPPONENT_SPECS:
+            raise ValueError(f"unknown opponent '{name}'; choose from self, {', '.join(OPPONENT_SPECS)}")
+        names.append(name)
+        weights.append(float(w))
+    total = sum(weights)
+    return names, [w / total for w in weights]
+
+
 class EnvRunner:
     """One environment plus the bookkeeping that must survive across updates.
 
@@ -98,10 +130,31 @@ class EnvRunner:
         self.n_players = n_players
         self.ep_steps = 0
         self._started = False
+        # [Moka] 이번 게임의 상대와 내 좌석
+        self.opponents = None          # (이름 목록, 확률 목록). None이면 원래 방식
+        self.rng = np.random.default_rng()
+        self.opp_name = "self"
+        self.opp_agent = None
+        self.learner_seat = 0
+
+    def new_game(self):
+        """[Moka] env.reset() 직후 호출: 이번 게임의 상대와 좌석을 추첨."""
+        if self.opponents is None:
+            return
+        names, probs = self.opponents
+        self.opp_name = str(self.rng.choice(names, p=probs))
+        self.learner_seat = int(self.rng.integers(self.n_players))
+        if self.opp_name == "self":
+            self.opp_agent = None
+        else:
+            self.opp_agent = make_agent(OPPONENT_SPECS[self.opp_name])
+            # 대회 도구처럼 forward model을 넘겨줌 (봇은 복사본에서만 계산)
+            self.opp_agent.on_game_start(ForwardModel(self.env.unwrapped))
 
     def ensure_ready(self):
         if not self._started or not self.env.agents:
             self.env.reset()
+            self.new_game()
             self._started = True
             self.ep_steps = 0
 
@@ -132,6 +185,7 @@ def collect_rollout(runner: EnvRunner, agent, num_steps: int, device: str,
     owner_buf = np.full(num_steps, -1,         dtype=np.int64)
 
     ep_wins, ep_vps, ep_lens = [], [], []
+    ep_opps = []                        # [Moka] 각 게임의 상대 이름
     illegal_ends = 0
 
     random_bots = [RandomBot() for _ in range(n - 1)] if training_mode == 'fixed_random' else None
@@ -174,13 +228,16 @@ def collect_rollout(runner: EnvRunner, agent, num_steps: int, device: str,
 
         scores = base.game.get_scores()
         best = max((s[0], s[1]) for s in scores)
-        ep_wins.append(1.0 if (scores[0][0], scores[0][1]) == best else 0.0)
-        ep_vps.append(scores[0][0])
+        me = runner.learner_seat        # [Moka] 0번 좌석이 아니라 학습 중인 쪽 기준
+        ep_wins.append(1.0 if (scores[me][0], scores[me][1]) == best else 0.0)
+        ep_vps.append(scores[me][0])
         ep_lens.append(runner.ep_steps)
+        ep_opps.append(runner.opp_name)
 
         while env.agents:               # drain the dead-step queue
             env.step(None)
         env.reset()
+        runner.new_game()               # [Moka] 다음 게임의 상대와 좌석 추첨
         runner.ep_steps = 0
         last_idx = [-1] * n
 
@@ -194,6 +251,16 @@ def collect_rollout(runner: EnvRunner, agent, num_steps: int, device: str,
 
         obs_t  = torch.FloatTensor(flat).unsqueeze(0).to(device)
         mask_t = torch.FloatTensor(mask).unsqueeze(0).to(device)
+
+        # [Moka] 상대가 고정된 봇이고 지금이 상대 차례면, 봇이 두고 저장하지 않음
+        if runner.opp_agent is not None and p_idx != runner.learner_seat:
+            raw = env.unwrapped.observe(agent_name)
+            bot_obs  = flatten_observation(raw["observation"])
+            bot_mask = np.asarray(raw["action_mask"], dtype=np.int8)
+            env.step(int(runner.opp_agent.act(bot_obs, bot_mask)))
+            runner.ep_steps += 1
+            finish_episode_if_over()
+            continue
 
         if training_mode == 'fixed_random' and p_idx != 0:
             with torch.no_grad():
@@ -237,7 +304,7 @@ def collect_rollout(runner: EnvRunner, agent, num_steps: int, device: str,
                 boot[p] = float(agent.get_value(o_t).item())
 
     return (obs_buf, act_buf, logp_buf, val_buf, rew_buf, done_buf, mask_buf,
-            owner_buf, boot, ep_wins, ep_vps, ep_lens, illegal_ends)
+            owner_buf, boot, ep_wins, ep_vps, ep_lens, illegal_ends, ep_opps)
 
 
 # ── GAE ───────────────────────────────────────────────────────────────────────
@@ -441,7 +508,7 @@ def train(args):
     # Agent + optimizer
     agent     = PPOAgent(obs_dim=obs_dim_for(args.num_players),
                          action_dim=ACT_DIM).to(device)
-    
+
     # [Moka] 이어서 학습하기: 무작위 숫자 대신 기존 체크포인트의 숫자로 시작
     if args.init_ckpt:
         ckpt  = torch.load(args.init_ckpt, map_location=device)
@@ -465,6 +532,15 @@ def train(args):
                                   num_players=args.num_players),
                          n_players=args.num_players)
                for _ in range(args.num_envs)]
+
+    # [Moka] 상대 섞기 설정
+    if args.opponents:
+        pool = parse_opponents(args.opponents)
+        for i, r in enumerate(runners):
+            r.opponents = pool
+            r.rng = np.random.default_rng(args.seed + i)
+        print("Opponents: " + ", ".join(f"{n} {p:.0%}" for n, p in zip(*pool)))
+    recent_by_opp = {}                  # 상대 이름 -> 최근 승패
 
     global_step      = 0
     update_count     = 0
@@ -494,7 +570,7 @@ def train(args):
 
         for runner in runners:
             (o, a, lp, v, r, d, m, own, bv,
-             ew, evp, el, ill) = collect_rollout(runner, agent, args.n_steps, device,
+             ew, evp, el, ill, eop) = collect_rollout(runner, agent, args.n_steps, device,
                                                  training_mode=args.training_mode)
             all_obs.append(o);    all_act.append(a);     all_logp.append(lp)
             all_val.append(v);    all_rew.append(r);     all_done.append(d)
@@ -503,6 +579,8 @@ def train(args):
             recent_vps.extend(evp)
             recent_lens.extend(el)
             illegal_ends += ill
+            for name, won in zip(eop, ew):
+                recent_by_opp.setdefault(name, deque(maxlen=200)).append(won)
 
         steps_this_update = args.n_steps * args.num_envs
         global_step      += steps_this_update
@@ -558,6 +636,10 @@ def train(args):
         print(f"step={global_step:>9,} | wr={wr:.3f} | vp={mvp:.1f} | "
               f"pg={pg_l:.4f} v={v_l:.4f} kl={kl:.4f} | "
               f"sps={sps:.0f} | eta={eta:.0f}m", flush=True)
+        if recent_by_opp:               # [Moka] 상대별 최근 승률
+            print("          vs " + " | ".join(
+                f"{n} {np.mean(d):.0%}({len(d)})" for n, d in sorted(recent_by_opp.items())),
+                flush=True)
 
         # Evaluation checkpoint
         if global_step >= next_eval_step:
@@ -644,6 +726,9 @@ def parse_args():
     p.add_argument("--num_envs",        type=int,   default=8,
                    help="Number of independent environments for rollout pooling")
     p.add_argument("--seed",            type=int,   default=42)
+    p.add_argument("--opponents",       type=str,   default=None,
+                   help="[Moka] mix opponents per game, e.g. "
+                        "self:0.4,orig:0.1,tradebuilding:0.15,actionvalue:0.15,factory:0.1,shippingrush:0.1")
     p.add_argument("--init_ckpt",       type=str,   default=None,
                    help="[Moka] start from this checkpoint instead of random weights")
     p.add_argument("--num_players",     type=int,   default=3, choices=[2, 3],
