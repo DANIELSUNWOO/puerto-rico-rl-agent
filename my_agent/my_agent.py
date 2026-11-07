@@ -37,17 +37,20 @@ _NET = None
 def _net():
     global _NET
     if _NET is None:
-        ckpt = torch.load(WEIGHTS, map_location="cpu", weights_only=False)
+        ckpt = torch.load(WEIGHTS, map_location="cpu")   # 조교 공지: 기본 설정으로 불러오기
         state = ckpt["model_state"] if "model_state" in ckpt else ckpt
         net = PpoNetwork(obs_dim=int(state["embed.0.weight"].shape[1]))
         net.load_state_dict(state)
         net.eval()
+        # [Moka] 예열: 첫 계산은 준비 시간 때문에 느릴 수 있어서, 게임 시작 전에 한 번 미리 계산해 둠
+        with torch.no_grad():
+            net.actor_logits(torch.zeros(1, net.embed[0].in_features))
         _NET = net
     return _NET
 
 
 class Moka(Agent):
-    name = "Moka"
+    name = "Moka"     # shown on the board; it may not be a baseline's name
 
     def __init__(self):
         super().__init__()
