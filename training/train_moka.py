@@ -64,6 +64,7 @@ from agents.ppo_agent import PpoNetwork as PPOAgent
 from training.random_bot import RandomBot
 # [Moka] 상대 섞기에 필요한 것들
 from agents.registry import make_agent
+from agents.ppo_agent import PpoAgent
 from puerto_rico.forward_model import ForwardModel
 from puerto_rico.observation import flatten_observation
 from puerto_rico.constants import Role
@@ -102,14 +103,37 @@ OPPONENT_SPECS = {
 }
 
 
+# [Moka] 과거 체크포인트 상대 (--pool_ckpts 로 추가). 이름 -> 체크포인트 경로
+POOL_CKPTS = {}
+_PPO_CACHE = {}                    # 신경망 상대는 상태가 없어서 한 번만 불러와 재사용
+
+
+def make_opponent(name):
+    """상대 이름으로 에이전트를 만듦. 신경망 상대(orig, 과거 체크포인트)는 재사용."""
+    if name in POOL_CKPTS or name == "orig":
+        if name not in _PPO_CACHE:
+            _PPO_CACHE[name] = (PpoAgent(checkpoint_path=POOL_CKPTS[name], egocentric=True)
+                                if name in POOL_CKPTS else make_agent("PPO"))
+        return _PPO_CACHE[name]
+    return make_agent(OPPONENT_SPECS[name])
+
+
+def parse_pool_ckpts(text):
+    """'e3_10=경로,e3_20=경로' -> POOL_CKPTS에 등록"""
+    for part in text.split(","):
+        name, path = part.split("=", 1)
+        POOL_CKPTS[name.strip().lower()] = path.strip()
+
+
 def parse_opponents(text):
     """'self:0.4,orig:0.1,...' -> (이름 목록, 확률 목록)"""
     names, weights = [], []
     for part in text.split(","):
         name, w = part.split(":")
         name = name.strip().lower()
-        if name != "self" and name not in OPPONENT_SPECS:
-            raise ValueError(f"unknown opponent '{name}'; choose from self, {', '.join(OPPONENT_SPECS)}")
+        if name != "self" and name not in OPPONENT_SPECS and name not in POOL_CKPTS:
+            raise ValueError(f"unknown opponent '{name}'; choose from self, "
+                             f"{', '.join(list(OPPONENT_SPECS) + list(POOL_CKPTS))}")
         names.append(name)
         weights.append(float(w))
     total = sum(weights)
@@ -147,7 +171,7 @@ class EnvRunner:
         if self.opp_name == "self":
             self.opp_agent = None
         else:
-            self.opp_agent = make_agent(OPPONENT_SPECS[self.opp_name])
+            self.opp_agent = make_opponent(self.opp_name)
             # 대회 도구처럼 forward model을 넘겨줌 (봇은 복사본에서만 계산)
             self.opp_agent.on_game_start(ForwardModel(self.env.unwrapped))
 
@@ -534,6 +558,9 @@ def train(args):
                for _ in range(args.num_envs)]
 
     # [Moka] 상대 섞기 설정
+    if args.pool_ckpts:
+        parse_pool_ckpts(args.pool_ckpts)
+        print("Past checkpoints: " + ", ".join(f"{n}={p}" for n, p in POOL_CKPTS.items()))
     if args.opponents:
         pool = parse_opponents(args.opponents)
         for i, r in enumerate(runners):
@@ -729,6 +756,9 @@ def parse_args():
     p.add_argument("--opponents",       type=str,   default=None,
                    help="[Moka] mix opponents per game, e.g. "
                         "self:0.4,orig:0.1,tradebuilding:0.15,actionvalue:0.15,factory:0.1,shippingrush:0.1")
+    p.add_argument("--pool_ckpts",      type=str,   default=None,
+                   help="[Moka] past checkpoints usable as opponents, e.g. "
+                        "e3_10=results/.../ckpt_01015808.pt,e3_30=results/.../ckpt_final.pt")
     p.add_argument("--init_ckpt",       type=str,   default=None,
                    help="[Moka] start from this checkpoint instead of random weights")
     p.add_argument("--num_players",     type=int,   default=3, choices=[2, 3],
