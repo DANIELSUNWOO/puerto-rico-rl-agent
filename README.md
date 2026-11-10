@@ -1,3 +1,80 @@
+# Moka — a Puerto Rico agent trained with PPO
+
+Moka is my entry for the final project of the Reinforcement Learning course at Chonnam National University (fall 2026): a 2-player agent for the board game *Puerto Rico*. Everyone in the class submits an agent, and a ladder of 1,000 games per pairing decides the ranking.
+
+The game engine, the competition rules, the baseline bots and a starting PPO checkpoint come from the TA's repository (the original README is kept below). What I did on top of it: designed the training, changed the training script, and ran and measured the experiments. Every experiment has its own note in [docs/experiments](docs/experiments/README.md) (in Korean), and [docs/ai-usage-log.md](docs/ai-usage-log.md) describes how I worked with an AI assistant (Claude) along the way.
+
+## Results
+
+Win rates of the TA's starting checkpoint and of Moka v3, on seeds that were never used for training or for picking the candidate. Every pairing plays each seed twice with the seats swapped.
+
+| Opponent | TA checkpoint | Moka v3 |
+|---|---:|---:|
+| TA checkpoint (1,000 games) | – | 93.4% |
+| TradeBuilding (1,000) | 88.0% | 99.9% |
+| ActionValue (1,000) | 90.0% | 98.9% |
+| SearchLite (1,000) | 40.3% | 89.5% |
+| MCTS (200) | 91.5% | 97.5% |
+| Search (200) | 32.5% | 78.0% |
+
+No timeouts and no illegal moves (limit: 0.1 s per move on one CPU thread).
+
+There have been three versions so far. A new version only replaces the old one if it beats it in 1,000 games on unseen seeds with the 95% interval above 50%: v1 → v2 won 65.3%, v2 → v3 won 71.4%.
+
+## What I changed, and what I learned
+
+**Fine-tuning from the TA checkpoint went wrong first.** I resumed training at the original learning rate (3e-4) and the policy fell apart: KL jumped to 0.72 and the win rate against the starting checkpoint went *down*. The original run had already decayed its learning rate to zero, so restarting at 3e-4 was far too large a step. 1e-5 brought KL back to about 0.013.
+
+**Mixed opponents instead of pure self-play.** Each game draws an opponent from a weighted pool: the current policy, the TA checkpoint, older Moka checkpoints, and the rule-based bots. Going from v2 to v3 I swapped 10% of the self-play games for SearchLite, the weakest matchup at the time. Against SearchLite, 6M more steps without it only moved 59.7% → 66.3%; with it, 89.5%. Search and MCTS were never in the pool, yet they improved too (57.5% → 78.0% and 91.5% → 97.5%), so the gain was not just learning one bot's habits.
+
+**Measuring was harder than training.** My first measurements used 50 games and I read a ±10-point swing as a real weakness. Two copies of the same weights scored 43% against each other, which turned out to be seat luck in the test script. Since then: a seat-swapped ladder, separate seed ranges for experiments and for final checks, and 1,000 games with a 95% interval before any decision.
+
+**The first move timed out.** On a single thread the first forward pass took 1.8 s. The agent now runs one dummy pass while loading, before the game starts.
+
+## Files I wrote or changed
+
+- `my_agent/my_agent.py` — the submitted agent (`Moka`)
+- `training/train_moka.py` — copy of the TA's `train_ppo.py` with an opponent pool, past-checkpoint opponents and `--init_ckpt` (changes marked `[Moka]`)
+- `training/export_entry.py` — turns a checkpoint into a ladder entry folder
+- `examples/study/` — scripts to replay and analyze recorded games
+- `docs/experiments/` — one note per experiment
+
+## Reproducing Moka v3
+
+The trained weights are not in this repository until the course ladder is over, so that other participants cannot train against Moka. The three runs below rebuild it (about 2, 2 and 12 hours on a 12-thread laptop CPU).
+
+```bash
+pip install -e ".[rl]"
+
+# v1: from the TA checkpoint
+python training/train_moka.py --num_players 2 --init_ckpt training/checkpoints/ppo_baseline_2p.pt \
+  --opponents self:0.4,orig:0.1,tradebuilding:0.15,actionvalue:0.15,factory:0.1,shippingrush:0.1 \
+  --lr 1e-5 --total_timesteps 3000000 --ckpt_interval 500000 --out_dir results/exp03_mix_lr1e-5
+
+# v2: from v1, with past checkpoints in the pool
+python training/train_moka.py --num_players 2 --init_ckpt results/exp03_mix_lr1e-5/checkpoints/ckpt_final.pt \
+  --pool_ckpts e3_10=results/exp03_mix_lr1e-5/checkpoints/ckpt_01015808.pt,e3_20=results/exp03_mix_lr1e-5/checkpoints/ckpt_02015232.pt,e3_30=results/exp03_mix_lr1e-5/checkpoints/ckpt_final.pt \
+  --opponents self:0.3,orig:0.05,e3_10:0.05,e3_20:0.1,e3_30:0.1,tradebuilding:0.15,actionvalue:0.15,factory:0.05,shippingrush:0.05 \
+  --lr 1e-5 --total_timesteps 3000000 --out_dir results/exp04b_pastself
+
+# v3: from v2, with SearchLite in the pool
+python training/train_moka.py --num_players 2 --init_ckpt results/exp04b_pastself/checkpoints/ckpt_final.pt \
+  --pool_ckpts e3_10=results/exp03_mix_lr1e-5/checkpoints/ckpt_01015808.pt,e3_20=results/exp03_mix_lr1e-5/checkpoints/ckpt_02015232.pt,e3_30=results/exp03_mix_lr1e-5/checkpoints/ckpt_final.pt \
+  --opponents self:0.2,searchlite:0.1,orig:0.05,e3_10:0.05,e3_20:0.1,e3_30:0.1,tradebuilding:0.15,actionvalue:0.15,factory:0.05,shippingrush:0.05 \
+  --lr 1e-5 --total_timesteps 6000000 --ckpt_interval 1000000 --out_dir results/exp06_searchlite
+
+python training/export_entry.py results/exp06_searchlite/checkpoints/ckpt_final.pt my_agent_v3 Moka
+python tools/validate_submission.py my_agent/my_agent.py:Moka --track 2p --time-limit 0.1
+```
+
+## What's next
+
+Search is still the weakest matchup at 78%. Before the first class ladder on Nov 19 I want to know whether Moka has holes that an opponent built specifically against it could find, so the next step is training an exploiter against a frozen Moka and feeding what it finds back into the pool.
+
+---
+
+*Below is the original README of the competition repository by the TA.*
+
 # Puerto Rico AI Competition
 
 [![tests](https://github.com/dae-hany/PuertoRico_AI_Competition/actions/workflows/tests.yml/badge.svg)](https://github.com/dae-hany/PuertoRico_AI_Competition/actions/workflows/tests.yml)
