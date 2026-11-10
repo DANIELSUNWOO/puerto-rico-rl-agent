@@ -2,7 +2,9 @@
 
 Moka is my entry for the final project of the Reinforcement Learning course at Chonnam National University (fall 2026): a 2-player agent for the board game *Puerto Rico*. Everyone in the class submits an agent, and a ladder of 1,000 games per pairing decides the ranking.
 
-The game engine, the competition rules, the baseline bots and a starting PPO checkpoint come from the TA's repository (the original README is kept below). What I did on top of it: designed the training, changed the training script, and ran and measured the experiments. Every experiment has its own note in [docs/experiments](docs/experiments/README.md) (in Korean), and [docs/ai-usage-log.md](docs/ai-usage-log.md) describes how I worked with an AI assistant (Claude) along the way.
+> **Status: in progress.** Class ladders run on Nov 19, 24, 26 and 28, and the final code is due Nov 29, 2026. The numbers below are for the current version (Moka v3, Nov 10) and will be updated as new versions pass the checks.
+
+The game engine, the competition rules, the baseline bots and a starting PPO checkpoint come from the TA's repository (the original README is kept below). What I did on top of it: designed the training, changed the training script, and ran and measured the experiments. Every experiment has its own note in [docs/experiments](docs/experiments/README.md) (in Korean), and [docs/ai-usage-log.md](docs/ai-usage-log.md) (in Korean) describes how I worked with an AI assistant (Claude) along the way.
 
 ## Results
 
