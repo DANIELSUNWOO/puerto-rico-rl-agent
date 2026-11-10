@@ -1,6 +1,6 @@
 # Moka — a Puerto Rico agent trained with PPO
 
-Moka is my entry for the final project of the Reinforcement Learning course at Chonnam National University (fall 2026): a 2-player agent for the board game *Puerto Rico*. Everyone in the class submits an agent, and a ladder of 1,000 games per pairing decides the ranking.
+Moka is my entry for the final project of the Reinforcement Learning course at Chonnam National University (fall 2026): a 2-player agent for the board game *Puerto Rico*. Everyone in the class submits an agent, and the agents play each other to decide the ranking.
 
 > **Status: in progress.** Class ladders run on Nov 19, 24, 26 and 28, and the final code is due Nov 29, 2026. The numbers below are for the current version (Moka v3, Nov 10) and will be updated as new versions pass the checks.
 
