@@ -100,6 +100,8 @@ OPPONENT_SPECS = {
     "shippingrush":  "ShippingRush",
     "random":        "Random",
     "searchlite":    "SearchLite",
+    "search":        "Search",        # alpha-beta 1500노드, SearchLite(250노드)보다 약 5배 느림
+    "mcts":          "MCTS",          # 60 시뮬레이션, SearchLite보다 약 3배 느림
 }
 
 
