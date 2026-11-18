@@ -3,6 +3,7 @@
 1. 선(첫 역할을 고르는 쪽)일 때와 후일 때의 승률
 2. 역할 선택: 한 판에 나와 상대가 각 역할을 몇 번 골랐는지, 건축가를 누가 가져갔는지
 3. 점수 구성: 이긴 판과 진 판에서 선적, 건물, 보너스 점수
+4. 선/후별 역할: 선일 때와 후일 때 고른 역할, 첫 라운드에 처음 고른 역할, 선일 때 진 판
 
 여러 폴더를 한 번에 받고, 하위 폴더의 games/*.json까지 모두 찾습니다.
 같은 판(같은 시드, 같은 좌석, 같은 참가자)이 여러 리그전에 겹쳐 있으면 한 번만 셉니다.
@@ -60,13 +61,17 @@ def find_games(folders, agents):
             continue
         roles = [Counter(), Counter()]
         n_roles = 0
+        first_roles = [None, None]               # 각 좌석이 첫 라운드에 처음 고른 역할
         for st, a in rec["actions"]:
             if a <= 7:
                 roles[st][6 if a == 7 else a] += 1
                 n_roles += 1
+                if first_roles[st] is None and n_roles <= 6:
+                    first_roles[st] = 6 if a == 7 else a
         seen[key] = {
             "seed": rec["seed"], "player_labels": rec["player_labels"], "winners": rec["winners"],
             "first": rec["actions"][0][0], "roles": roles, "rounds": n_roles / 6, "_path": path,
+            "first_roles": first_roles,
         }
     return list(seen.values())
 
@@ -169,6 +174,33 @@ def report(agent, games, vs, scores):
                 line += (f"\n      총점/선적/건물/보너스  나 {my[0]:.1f}/{my[1]:.1f}/{my[2]:.1f}/{my[3]:.1f}"
                          f"  상대 {op[0]:.1f}/{op[1]:.1f}/{op[2]:.1f}/{op[3]:.1f}")
             print(line)
+        seat_report(rows)
+
+
+def seat_report(rows):
+    """4. 선/후별 역할 선택과 첫 역할, 선일 때 진 판"""
+    print("  [선/후별]")
+    for name, first in (("선", True), ("후", False)):
+        sub = [(r, me) for r, me in rows if (r["first"] == me) == first]
+        if not sub:
+            continue
+        k = len(sub)
+        mine = Counter()
+        for r, me in sub:
+            mine.update(r["roles"][me])
+        print(f"    {name} {k}판, 역할 평균  " + " ".join(f"{ROLES[i]} {mine[i] / k:.1f}" for i in SHOW))
+        for label, won in (("이긴 판", True), ("진 판", False)):
+            part = [(r, me) for r, me in sub if (points(r, me) == 1.0) == won]
+            if not part:
+                continue
+            fr = Counter(r["first_roles"][me] for r, me in part)
+            top = ", ".join(f"{ROLES[i]} {c / len(part):.0%}" for i, c in fr.most_common(4) if i is not None)
+            print(f"      {label} {len(part)}판, 첫 라운드에 처음 고른 역할: {top}")
+    lost_first = sorted((r for r, me in rows if r["first"] == me and points(r, me) < 1.0), key=lambda r: r["seed"])
+    if lost_first:
+        print("    선일 때 진 판 (처음 3개):")
+        for r in lost_first[:3]:
+            print(f"      {r['_path']}")
 
 
 def main():
