@@ -1,21 +1,19 @@
 """
-A 2p entry built on a trained PPO network: the layout of a learned submission.
+Moka: 2p 트랙 에이전트 (전남대학교 강화학습 기말 과제).
 
-The folder holds what a learned entry ships: this file and ONE weight file next
-to it. Put the bundled 2p checkpoint there first:
+조교님이 제공한 PPO 체크포인트(training/checkpoints/ppo_baseline_2p.pt)에서
+출발해, training/train_moka.py로 여러 상대(자기 자신, 과거 버전, 학생 대역
+에이전트, 규칙 봇, SearchLite)를 섞어 이어서 학습한 정책 신경망을 씁니다.
+학습 과정과 측정 결과는 docs/experiments/ 에 있습니다.
 
-    cp training/checkpoints/ppo_baseline_2p.pt examples/ppo_entry/weights.pt
-    python tools/validate_submission.py examples/ppo_entry/my_agent.py --track 2p
+두는 방식: 매 수마다 정책 신경망이 고른, 가장 확률이 높은 합법 수를 둡니다.
+탐색은 하지 않습니다 (한 수 평균 약 1 ms).
 
-or point it at a checkpoint of your own (``training/train_ppo.py --num_players
-2`` writes ``<out_dir>/checkpoints/ckpt_final.pt``). The validator should report
-``[PASS] weight file``.
-
-As shipped it plays exactly like the PPO baseline: the most probable legal
-action. ``act`` is where to improve on it, e.g. by using the network's policy
-and value inside a search over ``forward_model`` (see
-docs/SEARCH_BASELINE_2P.md), or by fine-tuning the weights against the
-baselines that beat it.
+규칙 확인:
+- weights.pt 하나를 이 파일 위치 기준으로, 처음 만들 때 한 번만 읽습니다.
+- 모듈 변수에 두는 것은 그 신경망뿐이고, 게임 중에 바뀌지 않습니다.
+  게임 사이에 넘기는 정보는 없습니다.
+- 네트워크, 하위 프로세스, 파일 쓰기, 스레드 수 변경을 쓰지 않습니다.
 """
 import os
 

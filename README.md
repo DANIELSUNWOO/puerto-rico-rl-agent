@@ -2,76 +2,95 @@
 
 Moka is my entry for the final project of the Reinforcement Learning course at Chonnam National University (fall 2026): a 2-player agent for the board game *Puerto Rico*. Everyone in the class submits an agent, and the agents play each other to decide the ranking.
 
-> **Status: in progress.** Class ladders run on Nov 19, 24, 26 and 28, and the final code is due Nov 29, 2026. The numbers below are for the current version (Moka v3, Nov 10) and will be updated as new versions pass the checks.
+> **Status (Nov 23, 2026):** the current version is **Moka v7**. Training experiments end with experiment 14; a v8 is adopted only if it clearly beats v7. Class ladders run on Nov 19, 24, 26 and 28, and the final code is due Nov 29. In the first class ladder (Nov 19, Moka v6) Moka placed 3rd of 17.
 
 The game engine, the competition rules, the baseline bots and a starting PPO checkpoint come from the TA's repository (the original README is kept below). What I did on top of it: designed the training, changed the training script, and ran and measured the experiments. Every experiment has its own note in [docs/experiments](docs/experiments/README.md) (in Korean), and [docs/ai-usage-log.md](docs/ai-usage-log.md) (in Korean) describes how I worked with an AI assistant (Claude) along the way.
 
+## How it plays
+
+At every decision Moka feeds the (egocentric) observation to its policy network and plays the most probable legal move. There is no search inside `act()`; a move takes about 1 ms on one CPU thread (limit: 100 ms). Everything Moka knows comes from training.
+
 ## Results
 
-Win rates of the TA's starting checkpoint and of Moka v3, on seeds that were never used for training or for picking the candidate. Every pairing plays each seed twice with the seats swapped.
+Win rates of the TA's starting checkpoint and of Moka v7, on seeds that were never used for training or for picking the candidate (1,000 games per opponent unless noted). Every pairing plays each seed twice with the seats swapped.
 
-| Opponent | TA checkpoint | Moka v3 |
+| Opponent | TA checkpoint | Moka v7 |
 |---|---:|---:|
-| TA checkpoint (1,000 games) | – | 93.4% |
-| TradeBuilding (1,000) | 88.0% | 99.9% |
-| ActionValue (1,000) | 90.0% | 98.9% |
-| SearchLite (1,000) | 40.3% | 89.5% |
-| MCTS (200) | 91.5% | 97.5% |
-| Search (200) | 32.5% | 78.0% |
+| TradeBuilding | 88.0% | 99.5% |
+| ActionValue | 90.0% | 98.9% |
+| SearchLite | 40.3% | 96.2% |
+| MCTS | 91.5% (200) | 98.2% |
+| Search | 32.5% (200) | 92.0% |
+| Random / Factory / ShippingRush | – | 99.8–100% |
+| Student proxy P5 (never trained against) | – | 69.5% |
 
 No timeouts and no illegal moves (limit: 0.1 s per move on one CPU thread).
 
-There have been three versions so far. A new version only replaces the old one if it beats it in 1,000 games on unseen seeds with the 95% interval above 50%: v1 → v2 won 65.3%, v2 → v3 won 71.4%.
+The "student proxies" are agents I trained from the TA checkpoint the way another student might (self-play only, rule bots, SearchLite, longer runs), to stand in for the real opponents I cannot see. The strongest one, P5 (self-play for 12M steps), is Moka's weakest matchup.
+
+## Versions
+
+A new version only replaces the old one if it beats it in 1,000 games on unseen seeds with the 95% interval above 50%, and does not get worse against the strong opponents.
+
+| Version | Main change | vs previous version | Weakest opponent |
+|---|---|---|---:|
+| v1 | Mixed opponents instead of pure self-play, lr 1e-5 | 77.3% vs the TA checkpoint | Search 44.5% |
+| v2 | Past checkpoints in the pool | 65.3% | Search 57.5% |
+| v3 | SearchLite in the pool | 71.4% | Search 82.2% |
+| v4 | 6M more steps | 61.8% | Search 91.65% |
+| v5 | Exploiter: trained only against a frozen copy of the best Moka | 77.2% | Search 93.0% |
+| v6 | Student proxies in the pool instead of our own past versions | 62.1% | Proxy P4 85.1% |
+| v7 | v6's pool combined with more self-play | 63.4% | Proxy P5 69.5% |
 
 ## What I changed, and what I learned
 
 **Fine-tuning from the TA checkpoint went wrong first.** I resumed training at the original learning rate (3e-4) and the policy fell apart: KL jumped to 0.72 and the win rate against the starting checkpoint went *down*. The original run had already decayed its learning rate to zero, so restarting at 3e-4 was far too large a step. 1e-5 brought KL back to about 0.013.
 
-**Mixed opponents instead of pure self-play.** Each game draws an opponent from a weighted pool: the current policy, the TA checkpoint, older Moka checkpoints, and the rule-based bots. Going from v2 to v3 I swapped 10% of the self-play games for SearchLite, the weakest matchup at the time. Against SearchLite, 6M more steps without it only moved 59.7% → 66.3%; with it, 89.5%. Search and MCTS were never in the pool, yet they improved too (57.5% → 78.0% and 91.5% → 97.5%), so the gain was not just learning one bot's habits.
+**Mixed opponents instead of pure self-play.** Each game draws an opponent from a weighted pool: the current policy, the TA checkpoint, older Moka checkpoints, and the rule-based bots. Against SearchLite, the weakest matchup at the time, 6M more steps without it reached only 66.3%; with SearchLite in 10% of the games, 89.5%. Search and MCTS improved too although they were never in the pool.
 
-**Measuring was harder than training.** My first measurements used 50 games and I read a ±10-point swing as a real weakness. Two copies of the same weights scored 43% against each other, which turned out to be seat luck in the test script. Since then: a seat-swapped ladder, separate seed ranges for experiments and for final checks, and 1,000 games with a 95% interval before any decision.
+**You get strongest against what you practice with.** An exploiter trained only against a frozen Moka v3 beat it 84%, while an agent of the same general strength beat it only 58.5%: v3 had a hole that a targeted opponent could find. Putting the exploiter into the pool closed most of it. But agents that kept practicing against our own lineage beat outside agents less than expected (Moka v5 beat the student proxies only 76–81%). A controlled experiment (same start, one variable) showed each variant was best against the kind of opponent it trained with, so I moved the pool toward student proxies and tested on a proxy that no version had seen.
+
+**Search inside `act()` did not survive outside opponents.** Moka uses about 1% of its time budget, so I tried policy rollouts at decision time. Against the same network they won 80%, but against ActionValue the win rate collapsed from 92% to 51%: the rollouts assumed the opponent plays like our own policy. I did not adopt it.
+
+**Measuring was harder than training.** My first measurements used 50 games and I read a ±10-point swing as a real weakness. Two copies of the same weights scored 43% against each other, which turned out to be seat luck in the test script. Since then: a seat-swapped ladder, separate seed ranges for experiments and for final checks, and 1,000 games with a 95% interval before any decision. A 200-game result (57% for one candidate against P5) once looked like a weakness that 1,000 games did not confirm (69%). The game itself is not symmetric either: the first player starts with indigo and the second with corn, and almost every agent in the class ladder did 6–18 points worse as the first player.
 
 **The first move timed out.** On a single thread the first forward pass took 1.8 s. The agent now runs one dummy pass while loading, before the game starts.
 
 ## Files I wrote or changed
 
 - `my_agent/my_agent.py` — the submitted agent (`Moka`)
-- `training/train_moka.py` — copy of the TA's `train_ppo.py` with an opponent pool, past-checkpoint opponents and `--init_ckpt` (changes marked `[Moka]`)
-- `training/export_entry.py` — turns a checkpoint into a ladder entry folder
-- `examples/study/` — scripts to replay and analyze recorded games
+- `training/train_moka.py` — copy of the TA's `train_ppo.py` with an opponent pool, past-checkpoint opponents, Search/MCTS opponents and `--init_ckpt` (changes marked `[Moka]`)
+- `training/export_entry.py` — turns a checkpoint into a ladder entry folder (weights saved as a `state_dict`)
+- `examples/study/` — scripts to replay and analyze recorded games (`habits.py` for seat, role and score patterns over many games, `role_timing.py` for wasted roles)
 - `docs/experiments/` — one note per experiment
 
-## Reproducing Moka v3
+## Reproducing Moka
 
-The trained weights are not in this repository until the course ladder is over, so that other participants cannot train against Moka. The three runs below rebuild it (about 2, 2 and 12 hours on a 12-thread laptop CPU).
+The trained weights are not in this repository until the course is over, so that other participants cannot train against Moka. Each version is one run of `training/train_moka.py` started from the previous version; the exact opponent pool, steps and learning rate of every run are in its experiment note.
+
+| Version | Experiment | Starts from | Steps |
+|---|---|---|---:|
+| v1 | [03](docs/experiments/2026-11-07_03_mixed-opponents.md) | TA checkpoint | 3M |
+| v2 | [04](docs/experiments/2026-11-08_04_longer-and-past-self.md) | v1 | 3M |
+| v3 | [06](docs/experiments/2026-11-10_06_searchlite.md) | v2 | 6M |
+| v4 | [08](docs/experiments/2026-11-11_08_longer.md) | v3 | 6M |
+| v5 | [09](docs/experiments/2026-11-13_09_new_opponent_pool.md), [10](docs/experiments/2026-11-14_10_exploiter_round2.md) | v4 → E9a_60 → exploiter | 6M + 6M |
+| v6 | [11](docs/experiments/2026-11-17_11_student-proxies.md), [12](docs/experiments/2026-11-18_12_proxies-vs-selfplay.md) | v5 (proxies P1–P4 from the TA checkpoint) | 6M |
+| v7 | [13](docs/experiments/2026-11-21_13_combined-and-searchbots.md) | v6 | 6M |
+
+All runs use `--lr 1e-5`, which decays linearly to 0. A checkpoint becomes an entry with:
 
 ```bash
 pip install -e ".[rl]"
-
-# v1: from the TA checkpoint
-python training/train_moka.py --num_players 2 --init_ckpt training/checkpoints/ppo_baseline_2p.pt \
-  --opponents self:0.4,orig:0.1,tradebuilding:0.15,actionvalue:0.15,factory:0.1,shippingrush:0.1 \
-  --lr 1e-5 --total_timesteps 3000000 --ckpt_interval 500000 --out_dir results/exp03_mix_lr1e-5
-
-# v2: from v1, with past checkpoints in the pool
-python training/train_moka.py --num_players 2 --init_ckpt results/exp03_mix_lr1e-5/checkpoints/ckpt_final.pt \
-  --pool_ckpts e3_10=results/exp03_mix_lr1e-5/checkpoints/ckpt_01015808.pt,e3_20=results/exp03_mix_lr1e-5/checkpoints/ckpt_02015232.pt,e3_30=results/exp03_mix_lr1e-5/checkpoints/ckpt_final.pt \
-  --opponents self:0.3,orig:0.05,e3_10:0.05,e3_20:0.1,e3_30:0.1,tradebuilding:0.15,actionvalue:0.15,factory:0.05,shippingrush:0.05 \
-  --lr 1e-5 --total_timesteps 3000000 --out_dir results/exp04b_pastself
-
-# v3: from v2, with SearchLite in the pool
-python training/train_moka.py --num_players 2 --init_ckpt results/exp04b_pastself/checkpoints/ckpt_final.pt \
-  --pool_ckpts e3_10=results/exp03_mix_lr1e-5/checkpoints/ckpt_01015808.pt,e3_20=results/exp03_mix_lr1e-5/checkpoints/ckpt_02015232.pt,e3_30=results/exp03_mix_lr1e-5/checkpoints/ckpt_final.pt \
-  --opponents self:0.2,searchlite:0.1,orig:0.05,e3_10:0.05,e3_20:0.1,e3_30:0.1,tradebuilding:0.15,actionvalue:0.15,factory:0.05,shippingrush:0.05 \
-  --lr 1e-5 --total_timesteps 6000000 --ckpt_interval 1000000 --out_dir results/exp06_searchlite
-
-python training/export_entry.py results/exp06_searchlite/checkpoints/ckpt_final.pt my_agent_v3 Moka
-python tools/validate_submission.py my_agent/my_agent.py:Moka --track 2p --time-limit 0.1
+python training/export_entry.py <run>/checkpoints/ckpt_final.pt <entry_folder> Moka
+python tools/validate_submission.py <entry_folder>/my_agent.py:Moka --track 2p --time-limit 0.1
 ```
 
-## What's next
+## What I would try next
 
-Search is still the weakest matchup at 78%. Before the first class ladder on Nov 19 I want to know whether Moka has holes that an opponent built specifically against it could find, so the next step is training an exploiter against a frozen Moka and feeding what it finds back into the pool.
+- Search inside `act()` that does not assume the opponent plays like Moka: sample opponent moves from several networks (student proxies) and rule bots, and measure it only against opponents outside our own lineage.
+- A higher learning rate for long runs (the strongest proxy used twice Moka's rate), and comparing one long run with several restarted ones.
+- The first-player seat: most of the recent improvement came from the second seat.
 
 ---
 

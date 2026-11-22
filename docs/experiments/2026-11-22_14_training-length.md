@@ -56,6 +56,12 @@
 - 엔트리 폴더: results/entries_exp14 (P1, P4, P5, E13a_60, E13b_60, E14a_60, E14b_120, P6 — 8명).
 - my_agent.py 이름 줄을 PowerShell `Set-Content -Encoding utf8`로 바꿨더니 파일 앞에 BOM(U+FEFF)이 붙어 래더 도구가 문법 오류로 3명을 뺌. dry-run에서 발견. `System.Text.UTF8Encoding($false)`로 다시 저장해서 해결.
 
+## 마무리 결정 (2026-11-23)
+
+- 해커톤 준비와 시간을 나누기 위해 학습 실험은 이 실험으로 끝냄. 목표는 최종 4위 안.
+- 14a, 14b 중 나은 쪽이 Moka v7보다 확실히 나을 때만 Moka v8로 채택 (1000판 맞대결 범위 아래 끝 50% 위, P6·Search 상대에서 떨어지지 않음). 애매하면 v7을 그대로 씀.
+- 채택하면 제출용 weights.pt는 training/export_entry.py로 만듦 (이번 측정용 폴더는 체크포인트를 그대로 복사해서 학습 정보가 같이 들어 있음. 신경망 숫자는 같으므로 측정 결과에는 영향 없음).
+
 ## 리그전 (200판, 시드 10000-10099)
 
 (측정 중)
