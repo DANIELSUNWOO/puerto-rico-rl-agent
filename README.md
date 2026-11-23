@@ -2,7 +2,7 @@
 
 Moka is my entry for the final project of the Reinforcement Learning course at Chonnam National University (fall 2026): a 2-player agent for the board game *Puerto Rico*. Everyone in the class submits an agent, and the agents play each other to decide the ranking.
 
-> **Status (Nov 23, 2026):** the current version is **Moka v7**. Training experiments end with experiment 14; a v8 is adopted only if it clearly beats v7. Class ladders run on Nov 19, 24, 26 and 28, and the final code is due Nov 29. In the first class ladder (Nov 19, Moka v6) Moka placed 3rd of 17.
+> **Status (Nov 23, 2026):** the current version is **Moka v8**, and training is finished (experiment 14 was the last one). Class ladders run on Nov 19, 24, 26 and 28, and the final code is due Nov 29. In the first class ladder (Nov 19, Moka v6) Moka placed 3rd of 17.
 
 The game engine, the competition rules, the baseline bots and a starting PPO checkpoint come from the TA's repository (the original README is kept below). What I did on top of it: designed the training, changed the training script, and ran and measured the experiments. Every experiment has its own note in [docs/experiments](docs/experiments/README.md) (in Korean), and [docs/ai-usage-log.md](docs/ai-usage-log.md) (in Korean) describes how I worked with an AI assistant (Claude) along the way.
 
@@ -12,21 +12,21 @@ At every decision Moka feeds the (egocentric) observation to its policy network 
 
 ## Results
 
-Win rates of the TA's starting checkpoint and of Moka v7, on seeds that were never used for training or for picking the candidate (1,000 games per opponent unless noted). Every pairing plays each seed twice with the seats swapped.
+Win rates of the TA's starting checkpoint and of Moka v8, on seeds that were never used for training or for picking the candidate (1,000 games per opponent unless noted). Every pairing plays each seed twice with the seats swapped.
 
-| Opponent | TA checkpoint | Moka v7 |
+| Opponent | TA checkpoint | Moka v8 |
 |---|---:|---:|
-| TradeBuilding | 88.0% | 99.5% |
-| ActionValue | 90.0% | 98.9% |
-| SearchLite | 40.3% | 96.2% |
-| MCTS | 91.5% (200) | 98.2% |
-| Search | 32.5% (200) | 92.0% |
-| Random / Factory / ShippingRush | – | 99.8–100% |
-| Student proxy P5 (never trained against) | – | 69.5% |
+| TradeBuilding | 88.0% | 99.8% |
+| ActionValue | 90.0% | 99.4% |
+| SearchLite | 40.3% | 96.6% |
+| MCTS | 91.5% (200) | 98.4% |
+| Search | 32.5% (200) | 93.5% |
+| Random / Factory / ShippingRush | – | 99.9–100% |
+| Student proxy P6 (never trained against) | – | 80.2% |
 
 No timeouts and no illegal moves (limit: 0.1 s per move on one CPU thread).
 
-The "student proxies" are agents I trained from the TA checkpoint the way another student might (self-play only, rule bots, SearchLite, longer runs), to stand in for the real opponents I cannot see. The strongest one, P5 (self-play for 12M steps), is Moka's weakest matchup.
+The "student proxies" are agents I trained from the TA checkpoint the way another student might (self-play only, rule bots, SearchLite, longer runs), to stand in for the real opponents I cannot see. Moka v8 trained against P1–P5; P6 (self-play for 12M steps) was kept out of training to stand for a student Moka has never met.
 
 ## Versions
 
@@ -41,6 +41,7 @@ A new version only replaces the old one if it beats it in 1,000 games on unseen 
 | v5 | Exploiter: trained only against a frozen copy of the best Moka | 77.2% | Search 93.0% |
 | v6 | Student proxies in the pool instead of our own past versions | 62.1% | Proxy P4 85.1% |
 | v7 | v6's pool combined with more self-play | 63.4% | Proxy P5 69.5% |
+| v8 | Same pool, twice as long (12M steps) | 65.8% | Proxy P6 80.2% |
 
 ## What I changed, and what I learned
 
@@ -48,7 +49,7 @@ A new version only replaces the old one if it beats it in 1,000 games on unseen 
 
 **Mixed opponents instead of pure self-play.** Each game draws an opponent from a weighted pool: the current policy, the TA checkpoint, older Moka checkpoints, and the rule-based bots. Against SearchLite, the weakest matchup at the time, 6M more steps without it reached only 66.3%; with SearchLite in 10% of the games, 89.5%. Search and MCTS improved too although they were never in the pool.
 
-**You get strongest against what you practice with.** An exploiter trained only against a frozen Moka v3 beat it 84%, while an agent of the same general strength beat it only 58.5%: v3 had a hole that a targeted opponent could find. Putting the exploiter into the pool closed most of it. But agents that kept practicing against our own lineage beat outside agents less than expected (Moka v5 beat the student proxies only 76–81%). A controlled experiment (same start, one variable) showed each variant was best against the kind of opponent it trained with, so I moved the pool toward student proxies and tested on a proxy that no version had seen.
+**You get strongest against what you practice with.** An exploiter trained only against a frozen Moka v3 beat it 84%, while an agent of the same general strength beat it only 58.5%: v3 had a hole that a targeted opponent could find. Putting the exploiter into the pool closed most of it. But agents that kept practicing against our own lineage beat outside agents less than expected (Moka v5 beat the student proxies only 76–81%). A controlled experiment (same start, one variable) showed each variant was best against the kind of opponent it trained with, so I moved the pool toward student proxies and tested on a proxy that no version had seen. The same thing showed up with training length: 12M steps instead of 6M beat the previous version 65.8%, but against the unseen proxy P6 it stayed where it was (82.4% → 80.2%).
 
 **Search inside `act()` did not survive outside opponents.** Moka uses about 1% of its time budget, so I tried policy rollouts at decision time. Against the same network they won 80%, but against ActionValue the win rate collapsed from 92% to 51%: the rollouts assumed the opponent plays like our own policy. I did not adopt it.
 
@@ -77,6 +78,7 @@ The trained weights are not in this repository until the course is over, so that
 | v5 | [09](docs/experiments/2026-11-13_09_new_opponent_pool.md), [10](docs/experiments/2026-11-14_10_exploiter_round2.md) | v4 → E9a_60 → exploiter | 6M + 6M |
 | v6 | [11](docs/experiments/2026-11-17_11_student-proxies.md), [12](docs/experiments/2026-11-18_12_proxies-vs-selfplay.md) | v5 (proxies P1–P4 from the TA checkpoint) | 6M |
 | v7 | [13](docs/experiments/2026-11-21_13_combined-and-searchbots.md) | v6 | 6M |
+| v8 | [14](docs/experiments/2026-11-22_14_training-length.md) | v7 (proxy P5 added to the pool) | 12M |
 
 All runs use `--lr 1e-5`, which decays linearly to 0. A checkpoint becomes an entry with:
 
